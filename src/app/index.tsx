@@ -199,6 +199,9 @@ export default function TodayScreen() {
       <Text style={[text.tiny, styles.note]}>
         {data.sample ? '試作版です。記事とひとことは、すべて架空のサンプルです。' : '試作版です。記事は海外メディアの内容をAIが要約したものです。'}
       </Text>
+      <Pressable accessibilityRole="link" onPress={() => router.push('/about')} style={styles.aboutLink}>
+        <Text style={styles.aboutLinkText}>このアプリについて</Text>
+      </Pressable>
     </Page>
   );
 }
@@ -262,4 +265,6 @@ const styles = StyleSheet.create({
   archiveRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   archiveMeta: { fontFamily: fonts.body, fontSize: 11, fontWeight: '700' },
   note: { textAlign: 'center', marginTop: 28, paddingHorizontal: 16 },
+  aboutLink: { alignSelf: 'center', minHeight: 44, justifyContent: 'center', paddingHorizontal: 12 },
+  aboutLinkText: { fontFamily: fonts.body, fontSize: 12, fontWeight: '700', color: C.sunInk, textDecorationLine: 'underline' },
 });

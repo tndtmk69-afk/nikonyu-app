@@ -13,7 +13,7 @@ on:
       limit:
         description: 'AIに判定させる記事の数'
         required: false
-        default: '12'
+        default: '15'
 
 concurrency:
   group: ingest
@@ -35,7 +35,7 @@ jobs:
         run: npm ci
 
       - name: 記事を取り込む
-        run: npm run ingest -- --limit "${{ github.event.inputs.limit || '12' }}"
+        run: npm run ingest -- --limit "${{ github.event.inputs.limit || '15' }}"
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}

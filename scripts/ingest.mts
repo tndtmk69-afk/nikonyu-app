@@ -12,11 +12,22 @@ import { XMLParser } from 'fast-xml-parser';
 
 import { GEMINI_MODELS, generateJson } from '../src/server/gemini.ts';
 
+// 各情報源の新しい記事から交互に判定する。同じ記事が複数のRSSにあっても、URLで重複を除く
 const FEEDS = [
   { name: 'Good News Network', url: 'https://www.goodnewsnetwork.org/feed/' },
-  { name: 'SoraNews24', url: 'https://soranews24.com/feed/' },
+  { name: 'SoraNews24', url: 'https://soranews24.com/feed/' }, // にっぽん・くすっ
   { name: 'Positive News', url: 'https://www.positive.news/feed/' },
+  { name: 'UPI Odd News', url: 'https://rss.upi.com/news/odd_news.rss' }, // くすっ・もふもふ（事故なども混ざるのでAIが外す）
+  { name: 'Good News Network', url: 'https://www.goodnewsnetwork.org/category/news/animals/feed/' }, // もふもふ
+  { name: 'Good News Network', url: 'https://www.goodnewsnetwork.org/category/news/laughs/feed/' }, // くすっ
+  { name: 'Sunny Skyz', url: 'https://www.sunnyskyz.com/rss_tebow.php' }, // ほっこり・もふもふ
+  { name: 'Upworthy', url: 'https://www.upworthy.com/rss' }, // ほっこり
+  { name: 'Good Good Good', url: 'https://www.goodgoodgood.co/articles/rss.xml' }, // すごい・ほっこり
+  { name: 'Reasons to be Cheerful', url: 'https://reasonstobecheerful.world/feed/' }, // すごい
 ];
+
+// ニュースではない決まった連載やまとめ記事は、AIに送る前に見出しで外す
+const SKIP_TITLES = [/^Good News in History/i, /^What went right this week/i];
 
 const CATEGORIES = ['sugoi', 'hokkori', 'kusu', 'iyashi', 'mofu', 'nippon'] as const;
 type Category = (typeof CATEGORIES)[number];
@@ -82,13 +93,13 @@ type Judged = {
   body?: string[];
 };
 
-type Candidate = { feed: string; url: string; title: string; text: string; published: number };
+type Candidate = { feed: string; feedUrl: string; url: string; title: string; text: string; published: number };
 
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes('--dry-run');
 const REFRESH_TODAY = args.includes('--refresh-today');
 const limitIndex = args.indexOf('--limit');
-const LIMIT = limitIndex >= 0 ? Number(args[limitIndex + 1]) : 12;
+const LIMIT = limitIndex >= 0 ? Number(args[limitIndex + 1]) : 15;
 const WAIT_MS = 5000; // 無料枠の「1分あたりの回数」を超えないように、1件ごとに少し待つ
 
 const url = process.env.SUPABASE_URL;
@@ -122,11 +133,26 @@ async function fetchFeed(feed: (typeof FEEDS)[number]): Promise<Candidate[]> {
   const items = [xml?.rss?.channel?.item ?? []].flat();
   return items.map((item: Record<string, string>) => ({
     feed: feed.name,
+    feedUrl: feed.url,
     url: String(item.link),
     title: stripHtml(String(item.title ?? '')),
     text: stripHtml(String(item['content:encoded'] ?? item.description ?? '')).slice(0, 6000),
     published: Date.parse(String(item.pubDate ?? '')) || 0,
   }));
+}
+
+// RSSに本文が入っていない情報源（Sunny Skyz など）は、記事のページから本文の段落を読み取る
+async function fetchArticleText(url: string) {
+  try {
+    const res = await fetch(url, { headers: { 'User-Agent': 'nikonyu-prototype/0.1' } });
+    if (!res.ok) return '';
+    const html = await res.text();
+    const description = html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)/i)?.[1] ?? '';
+    const paragraphs = [...html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)].map((m) => stripHtml(m[1])).filter((p) => p.length > 40);
+    return stripHtml([description, ...paragraphs].join(' ')).slice(0, 6000);
+  } catch {
+    return '';
+  }
 }
 
 function articleId(c: Candidate) {
@@ -142,10 +168,12 @@ function todayJst() {
 async function main() {
   // 1. 集める
   const all: Candidate[] = [];
+  const collected = new Set<string>();
   for (const feed of FEEDS) {
     try {
-      const items = await fetchFeed(feed);
-      console.log(`・${feed.name}：${items.length}件`);
+      const items = (await fetchFeed(feed)).filter((c) => !collected.has(c.url));
+      for (const c of items) collected.add(c.url);
+      console.log(`・${feed.name}（${new URL(feed.url).pathname}）：${items.length}件`);
       all.push(...items);
     } catch (e) {
       console.warn(`△ ${(e as Error).message}（この情報源は飛ばします）`);
@@ -154,16 +182,22 @@ async function main() {
 
   const urls = all.map((c) => c.url);
   const seen = new Set<string>();
-  for (const table of ['seen_sources', 'articles'] as const) {
-    const column = table === 'seen_sources' ? 'url' : 'source_url';
-    const { data, error } = await db.from(table).select(column).in(column, urls);
-    if (error) fail(`${table} を読めませんでした: ${error.message}（supabase/schema.sql を実行しましたか？）`);
-    for (const row of data as Record<string, string>[]) seen.add(row[column]);
+  // URLが多いと問い合わせが長くなりすぎるので、100件ずつに分けて調べる
+  for (let i = 0; i < urls.length; i += 100) {
+    const chunk = urls.slice(i, i + 100);
+    for (const table of ['seen_sources', 'articles'] as const) {
+      const column = table === 'seen_sources' ? 'url' : 'source_url';
+      const { data, error } = await db.from(table).select(column).in(column, chunk);
+      if (error) fail(`${table} を読めませんでした: ${error.message}（supabase/schema.sql を実行しましたか？）`);
+      for (const row of data as Record<string, string>[]) seen.add(row[column]);
+    }
   }
 
   // 情報源が偏らないよう、各情報源の新しいものから交互に並べる
   const byFeed = FEEDS.map((f) =>
-    all.filter((c) => c.feed === f.name && !seen.has(c.url) && c.text.length > 80).sort((a, b) => b.published - a.published)
+    all
+      .filter((c) => c.feedUrl === f.url && !seen.has(c.url) && c.title && !SKIP_TITLES.some((re) => re.test(c.title)))
+      .sort((a, b) => b.published - a.published)
   );
   const queue: Candidate[] = [];
   for (let i = 0; queue.length < LIMIT && byFeed.some((list) => list[i]); i++) {
@@ -175,6 +209,11 @@ async function main() {
   const accepted: { id: string; category: Category }[] = [];
   for (const [i, c] of queue.entries()) {
     if (i > 0) await new Promise((r) => setTimeout(r, WAIT_MS));
+    if (c.text.length < 200) c.text = (await fetchArticleText(c.url)) || c.text;
+    if (c.text.length < 80) {
+      console.log(`△ [${c.feed}] ${c.title}\n   本文を読み取れなかったので飛ばします`);
+      continue;
+    }
     let judged: Judged;
     try {
       judged = await generateJson<Judged>({

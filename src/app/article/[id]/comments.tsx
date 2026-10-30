@@ -82,7 +82,12 @@ export default function CommentsScreen() {
 
       <View style={styles.notice}>
         <Fukumaru size={36} />
-        <Text style={styles.noticeText}>ここは、やさしいひとことの場所です。投稿の前に、ふくまるが言葉づかいをそっと確認します。</Text>
+        <Text style={styles.noticeText}>
+          ここは、やさしいひとことの場所です。投稿の前に、ふくまるが言葉づかいをそっと確認します。確認にはGoogleのAIを使っていて、内容がGoogleのサービス改善に使われることがあります。
+          <Text style={styles.noticeLink} onPress={() => router.push('/about')}>
+            くわしく
+          </Text>
+        </Text>
       </View>
 
       {toast ? (
@@ -259,6 +264,7 @@ const styles = StyleSheet.create({
   stampChipText: { fontFamily: fonts.body, fontSize: 12, fontWeight: '700', color: C.ink },
   notice: { flexDirection: 'row', alignItems: 'center', gap: 10, marginHorizontal: 16, marginTop: 14, padding: 10, paddingHorizontal: 14, borderRadius: 14, backgroundColor: C.sunTint },
   noticeText: { flex: 1, fontFamily: fonts.body, fontSize: 12, lineHeight: 19, color: C.brownInk },
+  noticeLink: { fontWeight: '700', color: C.sunInk, textDecorationLine: 'underline' },
   toast: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 16, marginTop: 12, padding: 10, paddingHorizontal: 14, borderRadius: 14, backgroundColor: C.goodTint },
   toastError: { backgroundColor: '#FBEBEB' },
   toastText: { flex: 1, fontFamily: fonts.body, fontSize: 13, fontWeight: '700', color: '#1F6B3A' },
