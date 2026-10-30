@@ -1,11 +1,10 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { CommentRow } from '@/components/nikonyu/comment';
 import { ChatIcon, ChevronIcon, Fukumaru, StampFace } from '@/components/nikonyu/icons';
-import { Scene } from '@/components/nikonyu/scene';
-import { BackHeader, CategoryChip, LoadState, Page, text, Thumb } from '@/components/nikonyu/ui';
+import { ArticleImage, BackHeader, CategoryChip, LoadState, Page, text, Thumb } from '@/components/nikonyu/ui';
 import { C, CATEGORIES, fonts, STAMPS, type StampKind } from '@/constants/nikonyu';
 import { api, useApi } from '@/lib/api';
 import type { ArticleDetailResponse, ArticleListResponse } from '@/lib/api-types';
@@ -61,9 +60,27 @@ export default function ArticleScreen() {
       <BackHeader title={todayIndex >= 0 ? `今日のにこにゅー　${todayIndex + 1} / ${today.length}` : CATEGORIES[article.category].label} />
 
       <View style={styles.hero}>
-        <Scene name={article.scene} width="100%" height={230} />
+        <ArticleImage article={article} width="100%" height={230} />
       </View>
-      <Text style={[text.tiny, styles.caption]}>写真はイメージです（{article.sceneCaption.replace(/^イメージ：/, '')}）</Text>
+      {article.photo ? (
+        // ライセンスに沿って、写真のタイトル・撮影者・掲載元・ライセンスを表記する
+        <Text style={[text.tiny, styles.caption]}>
+          写真はイメージです
+          <Text style={styles.creditLink} onPress={() => Linking.openURL(article.photo!.pageUrl)}>
+            「{article.photo.alt}」{article.photo.creator ? ` by ${article.photo.creator}` : ''}
+          </Text>
+          {' / '}
+          {article.photo.licenseUrl ? (
+            <Text style={styles.creditLink} onPress={() => Linking.openURL(article.photo!.licenseUrl!)}>
+              {article.photo.license}
+            </Text>
+          ) : (
+            article.photo.license
+          )}
+        </Text>
+      ) : (
+        <Text style={[text.tiny, styles.caption]}>写真はイメージです（{article.sceneCaption.replace(/^イメージ：/, '')}）</Text>
+      )}
 
       <View style={styles.article}>
         <View style={styles.metaRow}>
@@ -176,6 +193,7 @@ export default function ArticleScreen() {
 const styles = StyleSheet.create({
   hero: { marginHorizontal: 16, height: 230, borderRadius: 28, overflow: 'hidden' },
   caption: { marginHorizontal: 20, marginTop: 6 },
+  creditLink: { textDecorationLine: 'underline' },
   article: { paddingHorizontal: 20, paddingTop: 16, gap: 16 },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   title: { fontFamily: fonts.rounded, fontWeight: '800', fontSize: 23, lineHeight: 34, color: C.ink },

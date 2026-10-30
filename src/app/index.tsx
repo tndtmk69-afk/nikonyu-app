@@ -4,8 +4,7 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { CategoryIcon, ChatIcon, CheckCircleIcon, Fukumaru, StampFace } from '@/components/nikonyu/icons';
-import { Scene } from '@/components/nikonyu/scene';
-import { Card, CategoryChip, LoadState, Page, text, Thumb } from '@/components/nikonyu/ui';
+import { ArticleImage, Card, CategoryChip, LoadState, Page, text, Thumb } from '@/components/nikonyu/ui';
 import { C, CATEGORIES, CATEGORY_ORDER, fonts, type CategoryId } from '@/constants/nikonyu';
 import { useApi } from '@/lib/api';
 import type { ArticleListResponse } from '@/lib/api-types';
@@ -90,7 +89,7 @@ export default function TodayScreen() {
             <Pressable key={a.id} accessibilityRole="link" onPress={() => openArticle(a.id)}>
               <Card style={styles.bigCard}>
                 <View>
-                  <Scene name={a.scene} width="100%" height={190} />
+                  <ArticleImage article={a} width="100%" height={190} />
                   <Text style={styles.nextBadge}>
                     つぎはこれ　{i + 1} / {today.length}
                   </Text>

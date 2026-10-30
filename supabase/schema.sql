@@ -15,11 +15,14 @@ create table if not exists articles (
   body          jsonb not null,      -- 本文の段落（文字列の配列）
   source_name   text not null,
   source_url    text unique,
-  scene         text not null,       -- 仮の挿絵の名前（実写写真に切り替えるまで）
+  scene         text not null,       -- 写真がないときの挿絵の名前
   scene_caption text not null,
+  photo         jsonb,               -- Wikimedia Commons のイメージ写真（src/server/photos.ts の ArticlePhoto）。見つからなければ null
   seed_stamps   jsonb not null default '{}'::jsonb,  -- サンプル記事の初期スタンプ数
   created_at    timestamptz not null default now()
 );
+-- 写真の列を追加する前に作ったデータベース向け（この行だけ実行してもよい）
+alter table articles add column if not exists photo jsonb;
 create index if not exists articles_featured_idx on articles (featured_date desc, featured_rank);
 
 create table if not exists users (

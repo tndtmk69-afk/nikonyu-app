@@ -3,14 +3,17 @@
 //   npm run ingest -- --limit 6 … AIに送る記事の数を減らす（無料枠の上限対策）
 //   npm run ingest -- --dry-run … 保存せずに結果だけ表示する
 //   npm run ingest -- --refresh-today … 今日の5本を、新しく取り込んだ記事を優先して選び直す
+//   npm run ingest -- --photos-only … 記事は取り込まず、写真のない記事に写真を付ける
+//   npm run ingest -- --photos-only --redo … 写真のある記事も含めて、写真を選び直す
 //
 // 1. RSS から新しい記事を集める（判定済みのURLは飛ばす）
 // 2. Gemini が掲載基準で「載せる・載せない」とカテゴリを決め、日本語の要約を書く
-// 3. 載せる記事を Supabase に保存し、今日の5本がまだなければ選ぶ
+// 3. 載せる記事に Wikimedia Commons のイメージ写真を付けて Supabase に保存し、今日の5本がまだなければ選ぶ
 import { createClient } from '@supabase/supabase-js';
 import { XMLParser } from 'fast-xml-parser';
 
 import { GEMINI_MODELS, generateJson } from '../src/server/gemini.ts';
+import { findPhotoCandidates, PHOTO_QUERY_RULE, type ArticlePhoto } from '../src/server/photos.ts';
 
 // 各情報源の新しい記事から交互に判定する。同じ記事が複数のRSSにあっても、URLで重複を除く
 const FEEDS = [
@@ -32,7 +35,7 @@ const SKIP_TITLES = [/^Good News in History/i, /^What went right this week/i];
 const CATEGORIES = ['sugoi', 'hokkori', 'kusu', 'iyashi', 'mofu', 'nippon'] as const;
 type Category = (typeof CATEGORIES)[number];
 
-// 実写写真に切り替えるまでの仮の挿絵（カテゴリごと）
+// 写真が見つからなかったときの挿絵（カテゴリごと）
 const SCENE: Record<Category, { scene: string; caption: string }> = {
   sugoi: { scene: 'grad', caption: 'イメージ：がんばった人へのお祝い' },
   hokkori: { scene: 'letters', caption: 'イメージ：届いた手紙' },
@@ -63,9 +66,12 @@ const SYSTEM = `あなたは、世界のいいニュースだけを届ける日�
 - 元の記事にない事実や数字を足さない。本文は翻訳ではなく、自分の言葉での要約にする。
 - title：40文字以内。lead：60文字以内の一文。summary：3つ、それぞれ40文字以内。body：2〜3段落、各120文字以内。
 - region：「海外・アメリカ」「海外・イギリス」のように国名を入れる。日本の話は「日本（海外メディアより）」。
-- 載せない場合は accept=false にして、reason に理由を短く書く（ほかの項目は空でよい）。`;
+- 載せない場合は accept=false にして、reason に理由を短く書く（ほかの項目は空でよい）。
+
+${PHOTO_QUERY_RULE}`;
 
 // 文字列には必ず maxLength を付ける（付けないと同じ言葉を繰り返して止まらなくなる）
+const PHOTO_QUERIES_SCHEMA = { type: 'array', items: { type: 'string', maxLength: 40 }, minItems: 1, maxItems: 3 };
 const SCHEMA = {
   type: 'object',
   properties: {
@@ -77,9 +83,10 @@ const SCHEMA = {
     lead: { type: 'string', maxLength: 60 },
     summary: { type: 'array', items: { type: 'string', maxLength: 40 }, minItems: 3, maxItems: 3 },
     body: { type: 'array', items: { type: 'string', maxLength: 160 }, minItems: 1, maxItems: 3 },
+    photo_queries: PHOTO_QUERIES_SCHEMA,
   },
   // 全部を必須にする（載せない記事でも埋めてもらい、こちらで無視する）。必須でないと、載せる記事でも項目が抜けることがある
-  required: ['accept', 'reason', 'category', 'region', 'title', 'lead', 'summary', 'body'],
+  required: ['accept', 'reason', 'category', 'region', 'title', 'lead', 'summary', 'body', 'photo_queries'],
 };
 
 type Judged = {
@@ -91,6 +98,7 @@ type Judged = {
   lead?: string;
   summary?: string[];
   body?: string[];
+  photo_queries?: string[];
 };
 
 type Candidate = { feed: string; feedUrl: string; url: string; title: string; text: string; published: number };
@@ -98,6 +106,8 @@ type Candidate = { feed: string; feedUrl: string; url: string; title: string; te
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes('--dry-run');
 const REFRESH_TODAY = args.includes('--refresh-today');
+const PHOTOS_ONLY = args.includes('--photos-only');
+const REDO_PHOTOS = args.includes('--redo');
 const limitIndex = args.indexOf('--limit');
 const LIMIT = limitIndex >= 0 ? Number(args[limitIndex + 1]) : 15;
 const WAIT_MS = 5000; // 無料枠の「1分あたりの回数」を超えないように、1件ごとに少し待つ
@@ -161,11 +171,92 @@ function articleId(c: Candidate) {
   return `${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${h.toString(36)}`;
 }
 
+// 写真の候補から、記事に合うものをAIに1枚選んでもらう（合うものがなければ挿絵のまま）
+const PHOTO_PICK_SYSTEM = `ニュースアプリ「にこにゅー」の記事に添えるイメージ写真を選びます。
+候補の写真のタイトルを見て、記事の内容や雰囲気に一番合うものを1つ選び、その番号を index に入れてください。
+選ばないもの：
+- 人が主役に見える写真（集合写真、イベントの来場者など）
+- 記事と違う国や場所の写真だと誤解されるもの（日本の記事に外国の名所など）
+- 記事とほとんど関係のないもの、事故や軍事などの暗い印象のもの
+合うものがなければ index を -1 にしてください。`;
+
+// 同じ写真が続かないよう、最近の記事で使った写真は避ける
+let usedPhotos: Set<string> | null = null;
+
+async function pickPhoto(queries: string[] | undefined, article: { title: string; lead: string }): Promise<ArticlePhoto | null> {
+  if (!queries?.length) return null;
+  if (!usedPhotos) {
+    const { data } = REDO_PHOTOS
+      ? { data: [] }
+      : await db.from('articles').select('photo').not('photo', 'is', null).order('created_at', { ascending: false }).limit(200);
+    usedPhotos = new Set((data ?? []).map((r) => (r.photo as ArticlePhoto).id));
+  }
+  try {
+    const candidates = await findPhotoCandidates(queries, usedPhotos);
+    let photo: ArticlePhoto | null = null;
+    if (candidates.length > 0) {
+      const { index } = await generateJson<{ index: number }>({
+        model: GEMINI_MODELS.fast,
+        system: PHOTO_PICK_SYSTEM,
+        input: `見出し：${article.title}\nリード：${article.lead}\n\n候補：\n${candidates.map((c, i) => `${i}. ${c.alt}`).join('\n')}`,
+        schema: { type: 'object', properties: { index: { type: 'integer' } }, required: ['index'] },
+        maxOutputTokens: 64,
+      });
+      photo = candidates[index] ?? null;
+    }
+    if (photo) usedPhotos.add(photo.id);
+    console.log(
+      photo
+        ? `   写真：${photo.alt}（候補${candidates.length}枚から）`
+        : `   写真：合うものがなかったので挿絵にします（${queries.join(' / ')}、候補${candidates.length}枚）`
+    );
+    return photo;
+  } catch (e) {
+    console.warn(`   写真を探せませんでした（${article.title}）：${(e as Error).message}`);
+    return null;
+  }
+}
+
+// 写真のない記事に、あとから写真を付ける（写真を付ける仕組みを入れる前の記事や、見つからなかった記事向け）
+async function addMissingPhotos() {
+  let query = db.from('articles').select('id, title, lead');
+  if (!REDO_PHOTOS) query = query.is('photo', null);
+  const { data, error } = await query.order('created_at', { ascending: false }).limit(LIMIT);
+  if (error) fail(`記事を読めませんでした: ${error.message}（supabase/schema.sql の photo 列を追加しましたか？）`);
+  console.log(`${REDO_PHOTOS ? '写真を選び直す記事' : '写真のない記事'}：${data.length}件\n`);
+  let added = 0;
+  for (const [i, a] of data.entries()) {
+    if (i > 0) await new Promise((r) => setTimeout(r, WAIT_MS));
+    console.log(`・${a.title}`);
+    let queries: string[] | undefined;
+    try {
+      ({ photo_queries: queries } = await generateJson<{ photo_queries: string[] }>({
+        model: GEMINI_MODELS.fast,
+        system: `ニュース記事に添えるイメージ写真の検索語を考えます。\n${PHOTO_QUERY_RULE}`,
+        input: `見出し：${a.title}\nリード：${a.lead}`,
+        schema: { type: 'object', properties: { photo_queries: PHOTO_QUERIES_SCHEMA }, required: ['photo_queries'] },
+        maxOutputTokens: 256,
+      }));
+    } catch (e) {
+      console.warn(`   AIが検索語を考えられませんでした：${(e as Error).message}`);
+      continue;
+    }
+    const photo = await pickPhoto(queries, a);
+    if (DRY_RUN || (!photo && !REDO_PHOTOS)) continue;
+    const { error: updateError } = await db.from('articles').update({ photo }).eq('id', a.id);
+    if (updateError) console.warn(`   保存に失敗しました：${updateError.message}`);
+    else added++;
+  }
+  console.log(DRY_RUN ? '\n（--dry-run のため保存していません）' : `\n写真を付けた記事：${added}件`);
+}
+
 function todayJst() {
   return new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 async function main() {
+  if (PHOTOS_ONLY) return addMissingPhotos();
+
   // 1. 集める
   const all: Candidate[] = [];
   const collected = new Set<string>();
@@ -245,6 +336,7 @@ async function main() {
     const category = judged.category!;
     const id = articleId(c);
     console.log(`○ [${c.feed}] ${c.title}\n   → ${judged.title}（${category}）`);
+    const photo = await pickPhoto(judged.photo_queries, { title: judged.title!, lead: judged.lead! });
     if (DRY_RUN) continue;
 
     const { error } = await db.from('articles').insert({
@@ -260,6 +352,7 @@ async function main() {
       source_url: c.url,
       scene: SCENE[category].scene,
       scene_caption: SCENE[category].caption,
+      photo,
     });
     if (error) {
       console.warn(`   保存に失敗しました：${error.message}`);

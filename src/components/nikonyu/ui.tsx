@@ -1,3 +1,4 @@
+import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import type { PropsWithChildren, ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
@@ -7,6 +8,7 @@ import { BackIcon, CategoryIcon, Fukumaru } from '@/components/nikonyu/icons';
 import { Scene } from '@/components/nikonyu/scene';
 import { C, CATEGORIES, fonts, type CategoryId } from '@/constants/nikonyu';
 import type { SceneName } from '@/data/articles';
+import type { ArticlePhoto } from '@/server/photos';
 
 // Webでもスマホの幅（最大480px）に収めて表示する画面の枠
 export function Page({ children, footer }: PropsWithChildren<{ footer?: ReactNode }>) {
@@ -48,10 +50,19 @@ export function CategoryChip({ id, large }: { id: CategoryId; large?: boolean })
   );
 }
 
-export function Thumb({ article, size }: { article: { scene: SceneName }; size: number }) {
+type ImageArticle = { scene: SceneName; photo?: ArticlePhoto | null };
+
+// 記事のイメージ写真。写真が見つかっていない記事は挿絵で代用する
+export function ArticleImage({ article, width, height }: { article: ImageArticle; width: number | '100%'; height: number }) {
+  const { photo } = article;
+  if (!photo) return <Scene name={article.scene} width={width} height={height} />;
+  return <Image source={{ uri: photo.src }} accessibilityLabel={photo.alt} style={{ width, height }} contentFit="cover" transition={200} />;
+}
+
+export function Thumb({ article, size }: { article: ImageArticle; size: number }) {
   return (
     <View style={{ width: size, height: size, borderRadius: size / 5, overflow: 'hidden' }}>
-      <Scene name={article.scene} width={size} height={size} />
+      <ArticleImage article={article} width={size} height={size} />
     </View>
   );
 }

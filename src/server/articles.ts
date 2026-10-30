@@ -1,6 +1,7 @@
 import type { StampKind } from '@/constants/nikonyu';
 import { ARTICLES, type Article, type AvatarKind, type SceneName } from '@/data/articles';
 import type { ApiArticle, ApiComment, ArticleDetailResponse, ArticleListResponse } from '@/lib/api-types';
+import type { ArticlePhoto } from '@/server/photos';
 import { db, HttpError, isDbConfigured, must } from '@/server/supabase';
 
 const STAMP_KINDS: StampKind[] = ['hokko', 'sugoi', 'kusu', 'jin'];
@@ -20,6 +21,7 @@ type ArticleRow = {
   source_url: string | null;
   scene: SceneName;
   scene_caption: string;
+  photo: ArticlePhoto | null;
   seed_stamps: Partial<Record<StampKind, number>>;
 };
 
@@ -53,6 +55,7 @@ function toApiArticle(row: ArticleRow, counts: Map<string, number>, mine: Set<st
     sourceUrl: row.source_url,
     scene: row.scene,
     sceneCaption: row.scene_caption,
+    photo: row.photo ?? null,
     stamps,
     myStamps: STAMP_KINDS.filter((k) => mine.has(`${row.id}:${k}`)),
     commentCount,
@@ -172,6 +175,7 @@ function sampleArticle(a: Article): ApiArticle {
     sourceUrl: null,
     scene: a.scene,
     sceneCaption: a.sceneCaption,
+    photo: null,
     stamps: a.stamps,
     myStamps: [],
     commentCount: a.comments.length,

@@ -1,5 +1,6 @@
 import type { CategoryId, StampKind } from '@/constants/nikonyu';
 import type { AvatarKind, SceneName } from '@/data/articles';
+import type { ArticlePhoto } from '@/server/photos';
 
 // アプリとサーバー（src/app/api）の間でやり取りするデータの形
 
@@ -17,6 +18,7 @@ export type ApiArticle = {
   sourceUrl: string | null;
   scene: SceneName;
   sceneCaption: string;
+  photo: ArticlePhoto | null;
   stamps: Record<StampKind, number>;
   myStamps: StampKind[];
   commentCount: number;
