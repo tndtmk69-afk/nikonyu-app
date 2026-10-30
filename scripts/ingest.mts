@@ -3,16 +3,18 @@
 //   npm run ingest -- --limit 6 … AIに送る記事の数を減らす（無料枠の上限対策）
 //   npm run ingest -- --dry-run … 保存せずに結果だけ表示する
 //   npm run ingest -- --refresh-today … 今日の5本を、新しく取り込んだ記事を優先して選び直す
-//   npm run ingest -- --photos-only … 記事は取り込まず、写真のない記事に写真を付ける
-//   npm run ingest -- --photos-only --redo … 写真のある記事も含めて、写真を選び直す
+//   npm run ingest -- --photos-only … 記事は取り込まず、画像のない記事に画像を付ける
+//   npm run ingest -- --photos-only --redo … 画像のある記事も含めて、画像を作り直す
 //
 // 1. RSS から新しい記事を集める（判定済みのURLは飛ばす）
 // 2. Gemini が掲載基準で「載せる・載せない」とカテゴリを決め、日本語の要約を書く
-// 3. 載せる記事に Wikimedia Commons のイメージ写真を付けて Supabase に保存し、今日の5本がまだなければ選ぶ
+// 3. 載せる記事にイメージ画像（AIで作る。作れなければ Wikimedia Commons の写真）を付けて
+//    Supabase に保存し、今日の5本がまだなければ選ぶ
 import { createClient } from '@supabase/supabase-js';
 import { XMLParser } from 'fast-xml-parser';
 
 import { GEMINI_MODELS, generateJson } from '../src/server/gemini.ts';
+import { generateImage, IMAGE_PROMPT_RULE, isAiImageConfigured } from '../src/server/ai-image.ts';
 import { findPhotoCandidates, PHOTO_QUERY_RULE, type ArticlePhoto } from '../src/server/photos.ts';
 
 // 各情報源の新しい記事から交互に判定する。同じ記事が複数のRSSにあっても、URLで重複を除く
@@ -68,9 +70,12 @@ const SYSTEM = `あなたは、世界のいいニュースだけを届ける日�
 - region：「海外・アメリカ」「海外・イギリス」のように国名を入れる。日本の話は「日本（海外メディアより）」。
 - 載せない場合は accept=false にして、reason に理由を短く書く（ほかの項目は空でよい）。
 
+${IMAGE_PROMPT_RULE}
+
 ${PHOTO_QUERY_RULE}`;
 
 // 文字列には必ず maxLength を付ける（付けないと同じ言葉を繰り返して止まらなくなる）
+const IMAGE_PROMPT_SCHEMA = { type: 'string', maxLength: 500 };
 const PHOTO_QUERIES_SCHEMA = { type: 'array', items: { type: 'string', maxLength: 40 }, minItems: 1, maxItems: 3 };
 const SCHEMA = {
   type: 'object',
@@ -83,10 +88,11 @@ const SCHEMA = {
     lead: { type: 'string', maxLength: 60 },
     summary: { type: 'array', items: { type: 'string', maxLength: 40 }, minItems: 3, maxItems: 3 },
     body: { type: 'array', items: { type: 'string', maxLength: 160 }, minItems: 1, maxItems: 3 },
+    image_prompt: IMAGE_PROMPT_SCHEMA,
     photo_queries: PHOTO_QUERIES_SCHEMA,
   },
   // 全部を必須にする（載せない記事でも埋めてもらい、こちらで無視する）。必須でないと、載せる記事でも項目が抜けることがある
-  required: ['accept', 'reason', 'category', 'region', 'title', 'lead', 'summary', 'body', 'photo_queries'],
+  required: ['accept', 'reason', 'category', 'region', 'title', 'lead', 'summary', 'body', 'image_prompt', 'photo_queries'],
 };
 
 type Judged = {
@@ -98,6 +104,7 @@ type Judged = {
   lead?: string;
   summary?: string[];
   body?: string[];
+  image_prompt?: string;
   photo_queries?: string[];
 };
 
@@ -116,6 +123,7 @@ const url = process.env.SUPABASE_URL;
 const key = process.env.SUPABASE_SECRET_KEY;
 if (!url || !key) fail('SUPABASE_URL と SUPABASE_SECRET_KEY を .env.local に書いてください');
 if (!process.env.GEMINI_API_KEY) fail('GEMINI_API_KEY を .env.local に書いてください');
+if (!isAiImageConfigured()) console.warn('△ CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN がないので、画像はAIで作らず Wikimedia Commons の写真を使います');
 const db = createClient(url!, key!, { auth: { persistSession: false } });
 
 function fail(message: string): never {
@@ -171,6 +179,48 @@ function articleId(c: Candidate) {
   return `${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${h.toString(36)}`;
 }
 
+// 作った画像を置く Supabase Storage のバケット（だれでも読める）
+const IMAGE_BUCKET = 'article-images';
+let bucketReady = false;
+
+// AIで画像を作って Storage に置く。作れなかったら null（呼び出し側で Commons の写真に切り替える）
+async function makeAiImage(prompt: string | undefined, article: { id: string; title: string }): Promise<ArticlePhoto | null> {
+  if (!isAiImageConfigured() || !prompt) return null;
+  if (DRY_RUN) {
+    console.log(`   画像の指示文：${prompt}`);
+    return null;
+  }
+  try {
+    if (!bucketReady) {
+      const { data } = await db.storage.getBucket(IMAGE_BUCKET);
+      if (!data) {
+        const { error } = await db.storage.createBucket(IMAGE_BUCKET, { public: true });
+        if (error) throw new Error(`Storage のバケットを作れませんでした：${error.message}`);
+      }
+      bucketReady = true;
+    }
+    const { data, contentType, model } = await generateImage(prompt);
+    const path = `${article.id}.${contentType.split('/')[1]}`;
+    const { error } = await db.storage.from(IMAGE_BUCKET).upload(path, data, { contentType, upsert: true });
+    if (error) throw new Error(`画像を保存できませんでした：${error.message}`);
+    const { publicUrl } = db.storage.from(IMAGE_BUCKET).getPublicUrl(path).data;
+    console.log(`   画像：AIで作りました（${model}）`);
+    return {
+      id: `ai:${article.id}`,
+      src: `${publicUrl}?v=${Date.now()}`, // 作り直したときに古い画像が表示されないように
+      alt: `AIで作ったイメージ画像：${article.title}`,
+      creator: null,
+      license: 'AI生成',
+      licenseUrl: null,
+      pageUrl: '',
+      ai: true,
+    };
+  } catch (e) {
+    console.warn(`   AIで画像を作れませんでした：${(e as Error).message}（Commons の写真を探します）`);
+    return null;
+  }
+}
+
 // 写真の候補から、記事に合うものをAIに1枚選んでもらう（合うものがなければ挿絵のまま）
 const PHOTO_PICK_SYSTEM = `ニュースアプリ「にこにゅー」の記事に添えるイメージ写真を選びます。
 候補の写真のタイトルを見て、記事の内容や雰囲気に一番合うものを1つ選び、その番号を index に入れてください。
@@ -219,35 +269,39 @@ async function pickPhoto(queries: string[] | undefined, article: { title: string
 
 // 写真のない記事に、あとから写真を付ける（写真を付ける仕組みを入れる前の記事や、見つからなかった記事向け）
 async function addMissingPhotos() {
-  let query = db.from('articles').select('id, title, lead');
+  let query = db.from('articles').select('id, title, lead, region, body');
   if (!REDO_PHOTOS) query = query.is('photo', null);
   const { data, error } = await query.order('created_at', { ascending: false }).limit(LIMIT);
   if (error) fail(`記事を読めませんでした: ${error.message}（supabase/schema.sql の photo 列を追加しましたか？）`);
-  console.log(`${REDO_PHOTOS ? '写真を選び直す記事' : '写真のない記事'}：${data.length}件\n`);
+  console.log(`${REDO_PHOTOS ? '画像を作り直す記事' : '画像のない記事'}：${data.length}件\n`);
   let added = 0;
   for (const [i, a] of data.entries()) {
     if (i > 0) await new Promise((r) => setTimeout(r, WAIT_MS));
     console.log(`・${a.title}`);
-    let queries: string[] | undefined;
+    let plan: { image_prompt: string; photo_queries: string[] };
     try {
-      ({ photo_queries: queries } = await generateJson<{ photo_queries: string[] }>({
+      plan = await generateJson({
         model: GEMINI_MODELS.fast,
-        system: `ニュース記事に添えるイメージ写真の検索語を考えます。\n${PHOTO_QUERY_RULE}`,
-        input: `見出し：${a.title}\nリード：${a.lead}`,
-        schema: { type: 'object', properties: { photo_queries: PHOTO_QUERIES_SCHEMA }, required: ['photo_queries'] },
-        maxOutputTokens: 256,
-      }));
+        system: `ニュース記事に添えるイメージ画像の指示文と、写真の検索語を考えます。\n${IMAGE_PROMPT_RULE}\n\n${PHOTO_QUERY_RULE}`,
+        input: `見出し：${a.title}\n地域：${a.region}\nリード：${a.lead}\n本文：${(a.body as string[]).join('\n')}`,
+        schema: {
+          type: 'object',
+          properties: { image_prompt: IMAGE_PROMPT_SCHEMA, photo_queries: PHOTO_QUERIES_SCHEMA },
+          required: ['image_prompt', 'photo_queries'],
+        },
+        maxOutputTokens: 512,
+      });
     } catch (e) {
-      console.warn(`   AIが検索語を考えられませんでした：${(e as Error).message}`);
+      console.warn(`   AIが画像の指示文を考えられませんでした：${(e as Error).message}`);
       continue;
     }
-    const photo = await pickPhoto(queries, a);
+    const photo = (await makeAiImage(plan.image_prompt, a)) ?? (await pickPhoto(plan.photo_queries, a));
     if (DRY_RUN || (!photo && !REDO_PHOTOS)) continue;
     const { error: updateError } = await db.from('articles').update({ photo }).eq('id', a.id);
     if (updateError) console.warn(`   保存に失敗しました：${updateError.message}`);
     else added++;
   }
-  console.log(DRY_RUN ? '\n（--dry-run のため保存していません）' : `\n写真を付けた記事：${added}件`);
+  console.log(DRY_RUN ? '\n（--dry-run のため保存していません）' : `\n画像を付けた記事：${added}件`);
 }
 
 function todayJst() {
@@ -336,7 +390,9 @@ async function main() {
     const category = judged.category!;
     const id = articleId(c);
     console.log(`○ [${c.feed}] ${c.title}\n   → ${judged.title}（${category}）`);
-    const photo = await pickPhoto(judged.photo_queries, { title: judged.title!, lead: judged.lead! });
+    const photo =
+      (await makeAiImage(judged.image_prompt, { id, title: judged.title! })) ??
+      (await pickPhoto(judged.photo_queries, { title: judged.title!, lead: judged.lead! }));
     if (DRY_RUN) continue;
 
     const { error } = await db.from('articles').insert({

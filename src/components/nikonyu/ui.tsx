@@ -56,7 +56,16 @@ type ImageArticle = { scene: SceneName; photo?: ArticlePhoto | null };
 export function ArticleImage({ article, width, height }: { article: ImageArticle; width: number | '100%'; height: number }) {
   const { photo } = article;
   if (!photo) return <Scene name={article.scene} width={width} height={height} />;
-  return <Image source={{ uri: photo.src }} accessibilityLabel={photo.alt} style={{ width, height }} contentFit="cover" transition={200} />;
+  const image = <Image source={{ uri: photo.src }} accessibilityLabel={photo.alt} style={{ width, height }} contentFit="cover" transition={200} />;
+  if (!photo.ai) return image;
+  // AIで作った画像は、本物の写真と誤解されないよう、画像の上に必ず印を付ける（小さい画像では「AI」だけ）
+  const small = typeof width === 'number' && width < 120;
+  return (
+    <View style={{ width, height }}>
+      {image}
+      <Text style={[styles.aiBadge, small && styles.aiBadgeSmall]}>{small ? 'AI' : 'AI生成イメージ'}</Text>
+    </View>
+  );
 }
 
 export function Thumb({ article, size }: { article: ImageArticle; size: number }) {
@@ -108,6 +117,8 @@ const styles = StyleSheet.create({
   chipLarge: { paddingVertical: 4, paddingLeft: 9, paddingRight: 11 },
   chipText: { fontFamily: fonts.body, fontSize: 11, fontWeight: '700' },
   chipTextLarge: { fontSize: 12 },
+  aiBadge: { position: 'absolute', right: 8, bottom: 8, fontFamily: fonts.body, fontSize: 11, fontWeight: '700', color: '#FFFFFF', backgroundColor: 'rgba(0,0,0,0.55)', paddingVertical: 3, paddingHorizontal: 8, borderRadius: 999, overflow: 'hidden' },
+  aiBadgeSmall: { right: 4, bottom: 4, fontSize: 9, paddingVertical: 1, paddingHorizontal: 5 },
   loadState: { alignItems: 'center', gap: 10, paddingTop: 72, paddingHorizontal: 32 },
   loadText: { textAlign: 'center' },
   retry: { marginTop: 8, minHeight: 44, paddingHorizontal: 22, borderRadius: 999, backgroundColor: C.ink, alignItems: 'center', justifyContent: 'center' },

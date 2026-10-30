@@ -62,7 +62,9 @@ export default function ArticleScreen() {
       <View style={styles.hero}>
         <ArticleImage article={article} width="100%" height={230} />
       </View>
-      {article.photo ? (
+      {article.photo?.ai ? (
+        <Text style={[text.tiny, styles.caption]}>画像はAIで作ったイメージです。実際の出来事の写真ではありません。</Text>
+      ) : article.photo ? (
         // ライセンスに沿って、写真のタイトル・撮影者・掲載元・ライセンスを表記する
         <Text style={[text.tiny, styles.caption]}>
           写真はイメージです

@@ -12,6 +12,7 @@ export type ArticlePhoto = {
   license: string; // 例："CC BY 4.0"
   licenseUrl: string | null;
   pageUrl: string; // 写真の説明ページ
+  ai?: boolean; // AIで作った画像（src/server/ai-image.ts）。画面で「AI生成イメージ」と表示する
 };
 
 // AIに検索語を考えてもらうときのルール（取り込みとまとめての写真付けで共通）

@@ -1,6 +1,7 @@
 # 毎朝、海外のいいニュースを取り込んで「今日の5本」を選ぶ（scripts/ingest.mts）。
 # 必要なキーは、リポジトリの Settings > Secrets and variables > Actions に登録する：
 #   SUPABASE_URL / SUPABASE_SECRET_KEY / GEMINI_API_KEY
+#   CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN（記事の画像をAIで作る。なければ Wikimedia Commons の写真）
 name: 毎朝の記事取り込み
 
 on:
@@ -40,3 +41,5 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
