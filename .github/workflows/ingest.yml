@@ -1,0 +1,42 @@
+# 毎朝、海外のいいニュースを取り込んで「今日の5本」を選ぶ（scripts/ingest.mts）。
+# 必要なキーは、リポジトリの Settings > Secrets and variables > Actions に登録する：
+#   SUPABASE_URL / SUPABASE_SECRET_KEY / GEMINI_API_KEY
+name: 毎朝の記事取り込み
+
+on:
+  schedule:
+    # 日本時間の毎朝6:00（GitHubの時刻はUTCなので前日21:00）。混雑時は数十分遅れることがあるため、7:00の配信より早めに動かす
+    - cron: '0 21 * * *'
+  # Actions の画面から手動でも実行できる
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'AIに判定させる記事の数'
+        required: false
+        default: '12'
+
+concurrency:
+  group: ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: 部品をインストール
+        run: npm ci
+
+      - name: 記事を取り込む
+        run: npm run ingest -- --limit "${{ github.event.inputs.limit || '12' }}"
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

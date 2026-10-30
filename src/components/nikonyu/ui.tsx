@@ -3,10 +3,10 @@ import type { PropsWithChildren, ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { BackIcon, CategoryIcon } from '@/components/nikonyu/icons';
+import { BackIcon, CategoryIcon, Fukumaru } from '@/components/nikonyu/icons';
 import { Scene } from '@/components/nikonyu/scene';
 import { C, CATEGORIES, fonts, type CategoryId } from '@/constants/nikonyu';
-import type { Article } from '@/data/articles';
+import type { SceneName } from '@/data/articles';
 
 // Webでもスマホの幅（最大480px）に収めて表示する画面の枠
 export function Page({ children, footer }: PropsWithChildren<{ footer?: ReactNode }>) {
@@ -48,10 +48,26 @@ export function CategoryChip({ id, large }: { id: CategoryId; large?: boolean })
   );
 }
 
-export function Thumb({ article, size }: { article: Article; size: number }) {
+export function Thumb({ article, size }: { article: { scene: SceneName }; size: number }) {
   return (
     <View style={{ width: size, height: size, borderRadius: size / 5, overflow: 'hidden' }}>
       <Scene name={article.scene} width={size} height={size} />
+    </View>
+  );
+}
+
+// 読み込み中・エラーのときの表示
+export function LoadState({ error, onRetry }: { error?: string; onRetry?: () => void }) {
+  return (
+    <View style={styles.loadState}>
+      <Fukumaru pose={error ? 'oops' : 'basic'} size={96} />
+      <Text style={[text.bold, styles.loadText]}>{error ? 'あれれ、うまく読み込めませんでした' : 'ふくまるがニュースを運んでいます…'}</Text>
+      {error ? <Text style={[text.small, styles.loadText]}>{error}</Text> : null}
+      {error && onRetry ? (
+        <Pressable accessibilityRole="button" onPress={onRetry} style={styles.retry}>
+          <Text style={styles.retryText}>もう一度読み込む</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -81,6 +97,10 @@ const styles = StyleSheet.create({
   chipLarge: { paddingVertical: 4, paddingLeft: 9, paddingRight: 11 },
   chipText: { fontFamily: fonts.body, fontSize: 11, fontWeight: '700' },
   chipTextLarge: { fontSize: 12 },
+  loadState: { alignItems: 'center', gap: 10, paddingTop: 72, paddingHorizontal: 32 },
+  loadText: { textAlign: 'center' },
+  retry: { marginTop: 8, minHeight: 44, paddingHorizontal: 22, borderRadius: 999, backgroundColor: C.ink, alignItems: 'center', justifyContent: 'center' },
+  retryText: { fontFamily: fonts.body, fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
   card: {
     backgroundColor: C.card,
     borderRadius: 22,

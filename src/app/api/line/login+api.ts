@@ -1,3 +1,7 @@
+import type { LoginResponse } from '@/lib/api-types';
+import { createSession } from '@/server/actor';
+import { isDbConfigured } from '@/server/supabase';
+
 const TOKEN_ENDPOINT = 'https://api.line.me/oauth2/v2.1/token';
 const VERIFY_ENDPOINT = 'https://api.line.me/oauth2/v2.1/verify';
 
@@ -67,6 +71,14 @@ async function login(request: Request) {
     );
   }
 
-  // 試作では自前のセッションは発行せず、プロフィールだけを返す
-  return Response.json({ userId: claims.sub, name: claims.name, picture: claims.picture });
+  // データベースがあれば利用者を登録して、にこにゅーのセッションを発行する
+  const sessionToken = isDbConfigured()
+    ? await createSession({ lineUserId: claims.sub, name: claims.name, picture: claims.picture })
+    : null;
+  return Response.json({
+    userId: claims.sub,
+    name: claims.name,
+    picture: claims.picture,
+    token: sessionToken,
+  } satisfies LoginResponse);
 }

@@ -1,56 +1,39 @@
+import { Image } from 'expo-image';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Avatar, HeartIcon } from '@/components/nikonyu/icons';
 import { C, fonts } from '@/constants/nikonyu';
-import type { Article, AvatarKind } from '@/data/articles';
-import { useNikonyu } from '@/state/nikonyu-store';
+import type { ApiComment } from '@/lib/api-types';
 
-export type CommentItem = {
-  id: string;
-  author: string;
-  avatar: AvatarKind;
-  time: string;
-  text: string;
-  thanks: number;
-  mine: boolean;
+function timeLabel(iso: string) {
+  const minutes = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 60_000));
+  if (minutes < 1) return 'たった今';
+  if (minutes < 60) return `${minutes}分前`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)}時間前`;
+  return minutes < 48 * 60 ? 'きのう' : `${Math.floor(minutes / (24 * 60))}日前`;
+}
+
+type Props = {
+  item: ApiComment;
+  compact?: boolean;
+  onThanks?: () => void;
+  onReport?: () => void;
 };
 
-function timeLabel(minutesAgo: number) {
-  if (minutesAgo < 60) return `${minutesAgo}分前`;
-  if (minutesAgo < 24 * 60) return `${Math.floor(minutesAgo / 60)}時間前`;
-  return 'きのう';
-}
-
-// 自分の投稿を先頭に、通報したものを除いて並べる
-export function useArticleComments(article: Article): CommentItem[] {
-  const { posted, reported, thanked } = useNikonyu();
-  const mine: CommentItem[] = posted
-    .filter((p) => p.articleId === article.id)
-    .map((p) => ({ id: p.id, author: p.author, avatar: 'you', time: 'たった今', text: p.text, thanks: 0, mine: true }));
-  const seeds: CommentItem[] = article.comments.map((c) => ({
-    id: c.id,
-    author: c.author,
-    avatar: c.avatar,
-    time: timeLabel(c.minutesAgo),
-    text: c.text,
-    thanks: c.thanks,
-    mine: false,
-  }));
-  return [...mine, ...seeds]
-    .filter((c) => !reported[c.id])
-    .map((c) => ({ ...c, thanks: c.thanks + (thanked[c.id] ? 1 : 0) }));
-}
-
-export function CommentRow({ item, onReport, compact }: { item: CommentItem; onReport?: () => void; compact?: boolean }) {
-  const { thanked, toggleThanks } = useNikonyu();
-  const on = !!thanked[item.id];
+export function CommentRow({ item, compact, onThanks, onReport }: Props) {
+  const on = item.thankedByMe;
+  const size = compact ? 36 : 42;
   return (
     <View style={[styles.row, !compact && styles.rowBorder]}>
-      <Avatar kind={item.avatar} size={compact ? 36 : 42} />
+      {item.picture ? (
+        <Image source={item.picture} style={{ width: size, height: size, borderRadius: size / 2 }} contentFit="cover" />
+      ) : (
+        <Avatar kind={item.avatar} size={size} />
+      )}
       <View style={styles.body}>
         <View style={styles.nameRow}>
           <Text style={styles.name}>{item.author}</Text>
-          <Text style={styles.time}>{item.time}</Text>
+          <Text style={styles.time}>{timeLabel(item.createdAt)}</Text>
         </View>
         <Text style={styles.text}>{item.text}</Text>
         {compact ? null : (
@@ -58,8 +41,8 @@ export function CommentRow({ item, onReport, compact }: { item: CommentItem; onR
             <Pressable
               accessibilityRole="button"
               accessibilityState={{ selected: on }}
-              disabled={item.mine}
-              onPress={() => toggleThanks(item.id)}
+              disabled={item.mine || !onThanks}
+              onPress={onThanks}
               style={[styles.thanks, on && styles.thanksOn, item.mine && styles.thanksMine]}>
               <HeartIcon size={18} color={on ? '#FF6F8E' : '#FFC9D4'} />
               <Text style={styles.thanksText}>ありがとう {item.thanks}</Text>

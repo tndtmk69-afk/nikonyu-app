@@ -1,43 +1,64 @@
 import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { CommentRow, useArticleComments } from '@/components/nikonyu/comment';
+import { CommentRow } from '@/components/nikonyu/comment';
 import { CheckCircleIcon, Fukumaru, SendIcon, StampFace } from '@/components/nikonyu/icons';
-import { BackHeader, Page, text, Thumb } from '@/components/nikonyu/ui';
+import { BackHeader, LoadState, Page, text, Thumb } from '@/components/nikonyu/ui';
 import { C, CATEGORIES, fonts, STAMPS } from '@/constants/nikonyu';
-import { findArticle, type Article } from '@/data/articles';
-import { suggestGentler } from '@/lib/tone';
-import { useNikonyu } from '@/state/nikonyu-store';
+import { api, useApi } from '@/lib/api';
+import type { ApiArticle, ApiComment, ArticleDetailResponse, PostCommentResponse } from '@/lib/api-types';
+import { setSession, useSession } from '@/state/nikonyu-store';
 
 const MAX_LENGTH = 60;
 
 export default function CommentsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const article = findArticle(id);
-  if (!article) {
+  const detail = useApi<ArticleDetailResponse>(`/api/articles/${id}`);
+  const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null);
+
+  if (!detail.data) {
     return (
       <Page>
         <BackHeader />
-        <View style={styles.missing}>
-          <Fukumaru pose="oops" size={96} />
-          <Text style={text.bold}>あれれ、記事が見つかりませんでした</Text>
-        </View>
+        <LoadState error={detail.error} onRetry={detail.reload} />
       </Page>
     );
   }
-  return <CommentsContent key={article.id} article={article} />;
-}
 
-function CommentsContent({ article }: { article: Article }) {
-  const { report, stamps } = useNikonyu();
-  const comments = useArticleComments(article);
-  const [toast, setToast] = useState<string | null>(null);
-  const picked = stamps[article.id] ?? {};
+  const { article, comments } = detail.data;
+
+  const toggleThanks = (c: ApiComment) => {
+    const flip = (d: ArticleDetailResponse): ArticleDetailResponse => ({
+      ...d,
+      comments: d.comments.map((x) =>
+        x.id === c.id ? { ...x, thankedByMe: !x.thankedByMe, thanks: x.thanks + (x.thankedByMe ? -1 : 1) } : x
+      ),
+    });
+    detail.mutate(flip);
+    api('/api/thanks', { method: 'POST', body: { commentId: c.id } }).catch((e: Error) => {
+      detail.mutate(flip);
+      setToast({ text: e.message, error: true });
+    });
+  };
+
+  const report = (c: ApiComment) => {
+    detail.mutate((d) => ({ ...d, comments: d.comments.filter((x) => x.id !== c.id) }));
+    setToast({ text: '教えてくれてありがとう。運営が確認します' });
+    api('/api/reports', { method: 'POST', body: { commentId: c.id } }).catch((e: Error) => {
+      detail.reload();
+      setToast({ text: e.message, error: true });
+    });
+  };
+
+  const onPosted = (comment: ApiComment) => {
+    detail.mutate((d) => ({ ...d, comments: [comment, ...d.comments] }));
+    setToast({ text: 'ひとことを投稿しました' });
+  };
 
   return (
-    <Page footer={<Composer article={article} onPosted={() => setToast('ひとことを投稿しました')} />}>
+    <Page footer={<Composer article={article} sample={detail.data.sample} onPosted={onPosted} />}>
       <BackHeader title={`みんなのひとこと　${comments.length}件`} />
 
       <Pressable accessibilityRole="link" onPress={() => router.back()} style={styles.ref}>
@@ -54,7 +75,7 @@ function CommentsContent({ article }: { article: Article }) {
         {STAMPS.map((s) => (
           <View key={s.kind} style={styles.stampChip}>
             <StampFace kind={s.kind} size={22} />
-            <Text style={styles.stampChipText}>{(article.stamps[s.kind] + (picked[s.kind] ? 1 : 0)).toLocaleString('ja-JP')}</Text>
+            <Text style={styles.stampChipText}>{article.stamps[s.kind].toLocaleString('ja-JP')}</Text>
           </View>
         ))}
       </View>
@@ -65,40 +86,43 @@ function CommentsContent({ article }: { article: Article }) {
       </View>
 
       {toast ? (
-        <View style={styles.toast}>
-          <CheckCircleIcon size={18} />
-          <Text style={styles.toastText}>{toast}</Text>
+        <View style={[styles.toast, toast.error && styles.toastError]}>
+          {toast.error ? null : <CheckCircleIcon size={18} />}
+          <Text style={[styles.toastText, toast.error && styles.toastErrorText]}>{toast.text}</Text>
         </View>
       ) : null}
 
       <View style={styles.list}>
+        {comments.length === 0 ? <Text style={[text.small, styles.empty]}>まだひとことはありません。最初のひとことをどうぞ。</Text> : null}
         {comments.map((c) => (
-          <CommentRow
-            key={c.id}
-            item={c}
-            onReport={() => {
-              report(c.id);
-              setToast('教えてくれてありがとう。運営が確認します');
-            }}
-          />
+          <CommentRow key={c.id} item={c} onThanks={() => toggleThanks(c)} onReport={() => report(c)} />
         ))}
       </View>
     </Page>
   );
 }
 
-function Composer({ article, onPosted }: { article: Article; onPosted: () => void }) {
-  const { profile, addComment } = useNikonyu();
+function Composer({ article, sample, onPosted }: { article: ApiArticle; sample: boolean; onPosted: (c: ApiComment) => void }) {
+  const session = useSession();
   const [draft, setDraft] = useState('');
-  const [suggestion, setSuggestion] = useState<string | null>(null);
+  const [suggestion, setSuggestion] = useState<{ text: string; byAi: boolean } | null>(null);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  if (!profile) {
+  // データベースを入れる前にログインした人は、サーバーのセッションを持っていないので、ログインし直してもらう
+  if (!session || (!session.token && !sample)) {
     return (
       <View style={styles.composer}>
         <View style={styles.loginPrompt}>
-          <Text style={text.bold}>ひとことを書くには、LINEでログインしてください</Text>
+          <Text style={text.bold}>{session ? 'もう一度LINEでログインしてください' : 'ひとことを書くには、LINEでログインしてください'}</Text>
           <Text style={text.small}>読むこととスタンプは、ログインなしで使えます</Text>
-          <Pressable accessibilityRole="button" onPress={() => router.push('/login')} style={styles.lineButton}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              if (session) setSession(null);
+              router.push('/login');
+            }}
+            style={styles.lineButton}>
             <Text style={styles.lineButtonText}>LINEでログイン</Text>
           </Pressable>
         </View>
@@ -106,19 +130,28 @@ function Composer({ article, onPosted }: { article: Article; onPosted: () => voi
     );
   }
 
-  const send = () => {
+  const send = async () => {
     const t = draft.trim();
-    if (!t) return;
-    const gentler = suggestGentler(t);
-    if (gentler) {
-      setSuggestion(gentler);
-      return;
+    if (!t || sending) return;
+    setSending(true);
+    setError(null);
+    try {
+      const res = await api<PostCommentResponse>('/api/comments', { method: 'POST', body: { articleId: article.id, text: t } });
+      if (res.status === 'suggest') {
+        setSuggestion({ text: res.suggestion, byAi: res.byAi });
+      } else {
+        setDraft('');
+        setSuggestion(null);
+        onPosted(res.comment);
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSending(false);
     }
-    addComment(article.id, t);
-    setDraft('');
-    setSuggestion(null);
-    onPosted();
   };
+
+  const disabled = sample || !session.token;
 
   return (
     <View style={styles.composer}>
@@ -131,12 +164,12 @@ function Composer({ article, onPosted }: { article: Article; onPosted: () => voi
               <Text style={[text.small, { color: C.brownInk }]}>少しトゲが伝わるかもしれない言葉がありました。こう書くと、気持ちがまっすぐ届きそうです。</Text>
             </View>
           </View>
-          <Text style={styles.suggestBody}>{suggestion}</Text>
+          <Text style={styles.suggestBody}>{suggestion.text}</Text>
           <View style={styles.suggestButtons}>
             <Pressable
               accessibilityRole="button"
               onPress={() => {
-                setDraft(suggestion.slice(0, MAX_LENGTH));
+                setDraft(suggestion.text.slice(0, MAX_LENGTH));
                 setSuggestion(null);
               }}
               style={[styles.pill, styles.pillDark]}>
@@ -146,13 +179,19 @@ function Composer({ article, onPosted }: { article: Article; onPosted: () => voi
               <Text style={styles.pillLineText}>自分で書き直す</Text>
             </Pressable>
           </View>
+          {suggestion.byAi ? null : <Text style={text.tiny}>※ AIが使えないため、簡易チェックで提案しています</Text>}
         </View>
       ) : null}
 
+      {disabled ? (
+        <Text style={styles.errorText}>データベースが未設定のため、今はひとことを保存できません</Text>
+      ) : null}
+      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
       <View style={styles.composerMeta}>
         <View style={styles.me}>
-          {profile.picture ? <Image source={profile.picture} style={styles.meImage} contentFit="cover" /> : null}
-          <Text style={text.small}>{profile.name}（LINEでログイン中）</Text>
+          {session.profile.picture ? <Image source={session.profile.picture} style={styles.meImage} contentFit="cover" /> : null}
+          <Text style={text.small}>{session.profile.name}（LINEでログイン中）</Text>
         </View>
         <Text style={text.small}>
           {draft.length} / {MAX_LENGTH}
@@ -170,10 +209,16 @@ function Composer({ article, onPosted }: { article: Article; onPosted: () => voi
           placeholderTextColor="#8B8590"
           maxLength={MAX_LENGTH}
           multiline
+          editable={!disabled}
           style={styles.input}
         />
-        <Pressable accessibilityRole="button" accessibilityLabel="送る" onPress={send} style={styles.send}>
-          <SendIcon />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="送る"
+          disabled={disabled || sending}
+          onPress={send}
+          style={[styles.send, (disabled || sending) && styles.sendDisabled]}>
+          {sending ? <ActivityIndicator color="#2A2730" /> : <SendIcon />}
         </Pressable>
       </View>
     </View>
@@ -181,7 +226,6 @@ function Composer({ article, onPosted }: { article: Article; onPosted: () => voi
 }
 
 const styles = StyleSheet.create({
-  missing: { alignItems: 'center', gap: 12, paddingTop: 80 },
   ref: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -216,8 +260,11 @@ const styles = StyleSheet.create({
   notice: { flexDirection: 'row', alignItems: 'center', gap: 10, marginHorizontal: 16, marginTop: 14, padding: 10, paddingHorizontal: 14, borderRadius: 14, backgroundColor: C.sunTint },
   noticeText: { flex: 1, fontFamily: fonts.body, fontSize: 12, lineHeight: 19, color: C.brownInk },
   toast: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 16, marginTop: 12, padding: 10, paddingHorizontal: 14, borderRadius: 14, backgroundColor: C.goodTint },
-  toastText: { fontFamily: fonts.body, fontSize: 13, fontWeight: '700', color: '#1F6B3A' },
+  toastError: { backgroundColor: '#FBEBEB' },
+  toastText: { flex: 1, fontFamily: fonts.body, fontSize: 13, fontWeight: '700', color: '#1F6B3A' },
+  toastErrorText: { color: C.danger },
   list: { paddingHorizontal: 16, paddingTop: 4 },
+  empty: { paddingVertical: 16 },
   composer: { borderTopWidth: 1, borderTopColor: C.line, backgroundColor: '#FFFFFF', padding: 16, paddingBottom: 20, gap: 12 },
   loginPrompt: { alignItems: 'center', gap: 6 },
   lineButton: { alignSelf: 'stretch', minHeight: 50, borderRadius: 999, backgroundColor: C.lineGreen, alignItems: 'center', justifyContent: 'center', marginTop: 6 },
@@ -233,6 +280,7 @@ const styles = StyleSheet.create({
   pillDarkText: { fontFamily: fonts.body, fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
   pillLine: { borderWidth: 1.5, borderColor: C.ink },
   pillLineText: { fontFamily: fonts.body, fontSize: 13, fontWeight: '700', color: C.ink },
+  errorText: { fontFamily: fonts.body, fontSize: 12, lineHeight: 18, color: C.danger },
   composerMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   me: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 },
   meImage: { width: 24, height: 24, borderRadius: 12 },
@@ -252,12 +300,6 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: C.ink,
   },
-  send: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: C.sun,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  send: { width: 52, height: 52, borderRadius: 26, backgroundColor: C.sun, alignItems: 'center', justifyContent: 'center' },
+  sendDisabled: { opacity: 0.4 },
 });

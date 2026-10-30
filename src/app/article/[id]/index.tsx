@@ -1,48 +1,64 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { CommentRow, useArticleComments } from '@/components/nikonyu/comment';
+import { CommentRow } from '@/components/nikonyu/comment';
 import { ChatIcon, ChevronIcon, Fukumaru, StampFace } from '@/components/nikonyu/icons';
 import { Scene } from '@/components/nikonyu/scene';
-import { BackHeader, CategoryChip, Page, text, Thumb } from '@/components/nikonyu/ui';
-import { C, CATEGORIES, fonts, STAMPS } from '@/constants/nikonyu';
-import { findArticle, TODAY, type Article } from '@/data/articles';
-import { useNikonyu } from '@/state/nikonyu-store';
+import { BackHeader, CategoryChip, LoadState, Page, text, Thumb } from '@/components/nikonyu/ui';
+import { C, CATEGORIES, fonts, STAMPS, type StampKind } from '@/constants/nikonyu';
+import { api, useApi } from '@/lib/api';
+import type { ArticleDetailResponse, ArticleListResponse } from '@/lib/api-types';
+import { markRead, useRead } from '@/state/nikonyu-store';
 
 export default function ArticleScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const article = findArticle(id);
+  const detail = useApi<ArticleDetailResponse>(`/api/articles/${id}`);
+  const list = useApi<ArticleListResponse>('/api/articles');
+  const read = useRead();
+  const [notice, setNotice] = useState<string | null>(null);
 
-  if (!article) {
+  useEffect(() => {
+    if (detail.data) markRead(detail.data.article.id);
+  }, [detail.data]);
+
+  if (!detail.data) {
     return (
       <Page>
         <BackHeader />
-        <View style={styles.missing}>
-          <Fukumaru pose="oops" size={96} />
-          <Text style={text.bold}>あれれ、記事が見つかりませんでした</Text>
-        </View>
+        <LoadState error={detail.error} onRetry={detail.reload} />
       </Page>
     );
   }
-  return <ArticleContent key={article.id} article={article} />;
-}
 
-function ArticleContent({ article }: { article: Article }) {
-  const { markRead, stamps, toggleStamp, read } = useNikonyu();
-  const comments = useArticleComments(article);
+  const { article, comments } = detail.data;
+  const today = list.data?.today ?? [];
+  const todayIndex = today.findIndex((a) => a.id === article.id);
+  const next = today.find((a, i) => i > todayIndex && !read[a.id]) ?? today.find((a) => !read[a.id] && a.id !== article.id);
 
-  useEffect(() => {
-    markRead(article.id);
-  }, [article.id, markRead]);
-
-  const todayIndex = TODAY.findIndex((a) => a.id === article.id);
-  const next = TODAY.find((a, i) => i > todayIndex && !read[a.id]) ?? TODAY.find((a) => !read[a.id] && a.id !== article.id);
-  const picked = stamps[article.id] ?? {};
+  const toggleStamp = (kind: StampKind) => {
+    const flip = (d: ArticleDetailResponse): ArticleDetailResponse => {
+      const on = d.article.myStamps.includes(kind);
+      return {
+        ...d,
+        article: {
+          ...d.article,
+          myStamps: on ? d.article.myStamps.filter((k) => k !== kind) : [...d.article.myStamps, kind],
+          stamps: { ...d.article.stamps, [kind]: d.article.stamps[kind] + (on ? -1 : 1) },
+        },
+      };
+    };
+    detail.mutate(flip);
+    setNotice(null);
+    api('/api/stamps', { method: 'POST', body: { articleId: article.id, kind } }).catch((e: Error) => {
+      detail.mutate(flip); // 保存できなかったので元に戻す
+      setNotice(e.message);
+    });
+  };
 
   return (
     <Page>
-      <BackHeader title={todayIndex >= 0 ? `今日のにこにゅー　${todayIndex + 1} / ${TODAY.length}` : CATEGORIES[article.category].label} />
+      <BackHeader title={todayIndex >= 0 ? `今日のにこにゅー　${todayIndex + 1} / ${today.length}` : CATEGORIES[article.category].label} />
 
       <View style={styles.hero}>
         <Scene name={article.scene} width="100%" height={230} />
@@ -76,7 +92,12 @@ function ArticleContent({ article }: { article: Article }) {
 
         <View style={styles.source}>
           <Text style={text.small}>元記事：{article.source}</Text>
-          <Text style={text.small}>翻訳・要約：にこにゅー編集部</Text>
+          {article.sourceUrl ? (
+            <Text selectable style={[text.tiny, styles.sourceUrl]}>
+              {article.sourceUrl}
+            </Text>
+          ) : null}
+          <Text style={text.small}>翻訳・要約：にこにゅー編集部（AIによる要約を含みます）</Text>
         </View>
       </View>
 
@@ -87,23 +108,22 @@ function ArticleContent({ article }: { article: Article }) {
         </View>
         <View style={styles.stampGrid}>
           {STAMPS.map((s) => {
-            const on = !!picked[s.kind];
+            const on = article.myStamps.includes(s.kind);
             return (
               <Pressable
                 key={s.kind}
                 accessibilityRole="button"
                 accessibilityState={{ selected: on }}
-                onPress={() => toggleStamp(article.id, s.kind)}
+                onPress={() => toggleStamp(s.kind)}
                 style={[styles.stamp, on && { backgroundColor: s.tint, borderColor: s.ring }]}>
                 <StampFace kind={s.kind} size={on ? 48 : 42} />
                 <Text style={styles.stampLabel}>{s.label}</Text>
-                <Text style={[text.tiny, on && styles.stampCountOn]}>
-                  {(article.stamps[s.kind] + (on ? 1 : 0)).toLocaleString('ja-JP')}
-                </Text>
+                <Text style={[text.tiny, on && styles.stampCountOn]}>{article.stamps[s.kind].toLocaleString('ja-JP')}</Text>
               </Pressable>
             );
           })}
         </View>
+        {notice ? <Text style={styles.notice}>{notice}</Text> : null}
       </View>
 
       <View style={styles.comments}>
@@ -140,7 +160,7 @@ function ArticleContent({ article }: { article: Article }) {
             <ChevronIcon />
           </Pressable>
         </View>
-      ) : (
+      ) : today.length > 0 ? (
         <View style={styles.done}>
           <Fukumaru pose="jin" size={64} />
           <View style={styles.nextBody}>
@@ -148,13 +168,12 @@ function ArticleContent({ article }: { article: Article }) {
             <Text style={[text.small, { color: C.brownInk }]}>ふくまる「今日もいい日になりますように」</Text>
           </View>
         </View>
-      )}
+      ) : null}
     </Page>
   );
 }
 
 const styles = StyleSheet.create({
-  missing: { alignItems: 'center', gap: 12, paddingTop: 80 },
   hero: { marginHorizontal: 16, height: 230, borderRadius: 28, overflow: 'hidden' },
   caption: { marginHorizontal: 20, marginTop: 6 },
   article: { paddingHorizontal: 20, paddingTop: 16, gap: 16 },
@@ -166,6 +185,7 @@ const styles = StyleSheet.create({
   summaryNum: { fontFamily: fonts.body, fontSize: 14, lineHeight: 23, color: C.ink, width: 16 },
   summaryText: { flex: 1, fontFamily: fonts.body, fontSize: 14, lineHeight: 23, color: C.ink },
   source: { gap: 4, paddingTop: 14, borderTopWidth: 1, borderTopColor: C.line },
+  sourceUrl: { color: C.sub },
   stampBox: { marginHorizontal: 16, marginTop: 28, padding: 14, paddingTop: 20, borderRadius: 28, backgroundColor: C.soft, gap: 14 },
   stampHead: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', paddingHorizontal: 4, flexWrap: 'wrap', gap: 4 },
   stampGrid: { flexDirection: 'row', gap: 8 },
@@ -182,6 +202,7 @@ const styles = StyleSheet.create({
   },
   stampLabel: { fontFamily: fonts.body, fontSize: 12, fontWeight: '700', color: C.ink },
   stampCountOn: { fontWeight: '700', color: C.ink },
+  notice: { fontFamily: fonts.body, fontSize: 12, lineHeight: 18, color: C.danger, paddingHorizontal: 4 },
   comments: { paddingHorizontal: 20, paddingTop: 28 },
   commentsHead: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginBottom: 2 },
   commentsButton: {

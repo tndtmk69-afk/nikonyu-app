@@ -1,82 +1,84 @@
-import { createContext, useContext, useMemo, useState, type PropsWithChildren } from 'react';
+import * as Crypto from 'expo-crypto';
+import { useSyncExternalStore } from 'react';
+import { Platform } from 'react-native';
 
-import type { StampKind } from '@/constants/nikonyu';
 import type { LineProfile } from '@/lib/line-auth';
 
-// 試作では端末の中だけで状態を持つ（読み込み直すと元に戻る）。本番ではサーバーに保存する。
+// 端末に残しておく小さな状態（ログイン、既読、端末ID）。
+// Webでは localStorage に保存して、読み込み直しても消えないようにする。スマホでは今はメモリだけ。
+// 記事・スタンプ・ひとことはサーバー（Supabase）に保存する。
 
-export type PostedComment = {
-  id: string;
-  articleId: string;
-  author: string;
-  text: string;
-  createdAt: number;
-};
+function createPersisted<T>(key: string, initial: T) {
+  let value = initial;
+  let loaded = false;
+  const listeners = new Set<() => void>();
+  const canStore = () => Platform.OS === 'web' && typeof window !== 'undefined';
 
-type Store = {
-  profile: LineProfile | null;
-  setProfile: (p: LineProfile | null) => void;
-  read: Record<string, true>;
-  markRead: (articleId: string) => void;
-  stamps: Record<string, Partial<Record<StampKind, true>>>;
-  toggleStamp: (articleId: string, kind: StampKind) => void;
-  thanked: Record<string, true>;
-  toggleThanks: (commentId: string) => void;
-  reported: Record<string, true>;
-  report: (commentId: string) => void;
-  posted: PostedComment[];
-  addComment: (articleId: string, text: string) => void;
-};
+  const load = () => {
+    if (loaded || !canStore()) return;
+    loaded = true;
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (raw) value = JSON.parse(raw) as T;
+    } catch {
+      // 保存領域が使えないときはメモリだけで動く
+    }
+  };
 
-const StoreContext = createContext<Store | null>(null);
-
-export function NikonyuProvider({ children }: PropsWithChildren) {
-  const [profile, setProfile] = useState<LineProfile | null>(null);
-  const [read, setRead] = useState<Record<string, true>>({});
-  const [stamps, setStamps] = useState<Store['stamps']>({});
-  const [thanked, setThanked] = useState<Record<string, true>>({});
-  const [reported, setReported] = useState<Record<string, true>>({});
-  const [posted, setPosted] = useState<PostedComment[]>([]);
-
-  const value = useMemo<Store>(
-    () => ({
-      profile,
-      setProfile,
-      read,
-      markRead: (id) => setRead((r) => (r[id] ? r : { ...r, [id]: true })),
-      stamps,
-      toggleStamp: (id, kind) =>
-        setStamps((s) => {
-          const current = { ...s[id] };
-          if (current[kind]) delete current[kind];
-          else current[kind] = true;
-          return { ...s, [id]: current };
-        }),
-      thanked,
-      toggleThanks: (cid) =>
-        setThanked((t) => {
-          const next = { ...t };
-          if (next[cid]) delete next[cid];
-          else next[cid] = true;
-          return next;
-        }),
-      reported,
-      report: (cid) => setReported((r) => ({ ...r, [cid]: true })),
-      posted,
-      addComment: (articleId, text) =>
-        setPosted((p) => [
-          { id: `posted-${Date.now()}`, articleId, author: profile?.name ?? 'あなた', text, createdAt: Date.now() },
-          ...p,
-        ]),
-    }),
-    [profile, read, stamps, thanked, reported, posted]
-  );
-
-  return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
+  return {
+    get: () => {
+      load();
+      return value;
+    },
+    set: (next: T) => {
+      load();
+      value = next;
+      if (canStore()) {
+        try {
+          window.localStorage.setItem(key, JSON.stringify(next));
+        } catch {
+          // 同上
+        }
+      }
+      listeners.forEach((l) => l());
+    },
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    initial,
+  };
 }
 
-export function useNikonyu() {
-  const store = useContext(StoreContext);
-  if (!store) throw new Error('useNikonyu は NikonyuProvider の中で使ってください');
-  return store;
+type Persisted<T> = ReturnType<typeof createPersisted<T>>;
+
+// Webのサーバー描画では初期値、ブラウザでは保存した値を使う
+function usePersisted<T>(store: Persisted<T>) {
+  return useSyncExternalStore(store.subscribe, store.get, () => store.initial);
+}
+
+export type Session = { token: string | null; profile: LineProfile };
+
+const sessionStore = createPersisted<Session | null>('nikonyu.session', null);
+const readStore = createPersisted<Record<string, true>>('nikonyu.read', {});
+const deviceStore = createPersisted<string | null>('nikonyu.device', null);
+
+export const useSession = () => usePersisted(sessionStore);
+export const getSession = () => sessionStore.get();
+export const setSession = (s: Session | null) => sessionStore.set(s);
+
+export const useRead = () => usePersisted(readStore);
+export function markRead(articleId: string) {
+  const current = readStore.get();
+  if (!current[articleId]) readStore.set({ ...current, [articleId]: true });
+}
+
+// ログインしていない人のスタンプや「ありがとう」を区別するための端末ID（初めて使うときに作る）
+export function getDeviceId() {
+  let id = deviceStore.get();
+  if (!id) {
+    id = Crypto.randomUUID();
+    deviceStore.set(id);
+  }
+  return id;
 }

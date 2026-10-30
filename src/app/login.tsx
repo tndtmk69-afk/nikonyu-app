@@ -11,8 +11,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Fukumaru } from '@/components/nikonyu/icons';
 import { fonts } from '@/constants/nikonyu';
+import type { LoginResponse } from '@/lib/api-types';
 import { LINE_CHANNEL_ID, lineDiscovery } from '@/lib/line-auth';
-import { useNikonyu } from '@/state/nikonyu-store';
+import { setSession, useSession } from '@/state/nikonyu-store';
 
 function goBack() {
   if (router.canGoBack()) router.back();
@@ -52,7 +53,8 @@ export default function LoginScreen() {
     },
     lineDiscovery
   );
-  const { profile, setProfile } = useNikonyu();
+  const session = useSession();
+  const profile = session?.profile ?? null;
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -109,9 +111,9 @@ export default function LoginScreen() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code, redirectUri, codeVerifier, nonce }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as LoginResponse & { error?: string };
       if (!res.ok) throw new Error(data.error);
-      setProfile(data);
+      setSession({ token: data.token, profile: { userId: data.userId, name: data.name, picture: data.picture } });
       goBack();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -139,7 +141,7 @@ export default function LoginScreen() {
           <Pressable style={styles.secondaryButton} onPress={goBack}>
             <Text style={styles.secondaryButtonText}>もどる</Text>
           </Pressable>
-          <Pressable onPress={() => setProfile(null)}>
+          <Pressable onPress={() => setSession(null)}>
             <Text style={styles.small}>ログアウトする</Text>
           </Pressable>
         </View>

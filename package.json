@@ -4,6 +4,8 @@
   "main": "expo-router/entry",
   "dependencies": {
     "@expo/ui": "~58.0.23",
+    "@google/genai": "^2.31.0",
+    "@supabase/supabase-js": "^2.118.0",
     "expo": "~58.0.19",
     "expo-auth-session": "~58.0.14",
     "expo-constants": "~58.0.13",
@@ -19,6 +21,7 @@
     "expo-symbols": "~58.0.4",
     "expo-system-ui": "~58.0.6",
     "expo-web-browser": "~58.0.6",
+    "fast-xml-parser": "^5.11.2",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-native": "0.88.0",
@@ -46,6 +49,8 @@
     "web:system-ca": "node --use-system-ca node_modules/expo/bin/cli start --web",
     "start:system-ca": "node --use-system-ca node_modules/expo/bin/cli start",
     "tunnel:system-ca": "node --use-system-ca node_modules/expo/bin/cli start --tunnel",
+    "seed": "node --use-system-ca --env-file-if-exists=.env.local scripts/seed.mts",
+    "ingest": "node --use-system-ca --env-file-if-exists=.env.local scripts/ingest.mts",
     "lint": "expo lint"
   },
   "private": true

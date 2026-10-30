@@ -5,10 +5,11 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { CategoryIcon, ChatIcon, CheckCircleIcon, Fukumaru, StampFace } from '@/components/nikonyu/icons';
 import { Scene } from '@/components/nikonyu/scene';
-import { Card, CategoryChip, Page, text, Thumb } from '@/components/nikonyu/ui';
+import { Card, CategoryChip, LoadState, Page, text, Thumb } from '@/components/nikonyu/ui';
 import { C, CATEGORIES, CATEGORY_ORDER, fonts, type CategoryId } from '@/constants/nikonyu';
-import { ARTICLES, TODAY, type Article } from '@/data/articles';
-import { useNikonyu } from '@/state/nikonyu-store';
+import { useApi } from '@/lib/api';
+import type { ArticleListResponse } from '@/lib/api-types';
+import { useRead, useSession } from '@/state/nikonyu-store';
 
 function todayLabel() {
   const d = new Date();
@@ -20,30 +21,49 @@ function openArticle(id: string) {
 }
 
 export default function TodayScreen() {
-  const { read, profile, posted } = useNikonyu();
+  const session = useSession();
+  const read = useRead();
+  const { data, error, reload } = useApi<ArticleListResponse>('/api/articles');
   const [cat, setCat] = useState<CategoryId | 'all'>('all');
 
-  const readCount = TODAY.filter((a) => read[a.id]).length;
-  const nextId = TODAY.find((a) => !read[a.id])?.id;
-  const remaining = TODAY.length - readCount;
-  const commentCount = (a: Article) => a.comments.length + posted.filter((p) => p.articleId === a.id).length;
-  const archive = cat === 'all' ? ARTICLES.filter((a) => a.day === 'yesterday') : ARTICLES.filter((a) => a.category === cat);
+  const header = (
+    <View style={styles.header}>
+      <View style={styles.brand}>
+        <Fukumaru size={36} />
+        <Text style={styles.brandText}>にこにゅー</Text>
+      </View>
+      <Pressable accessibilityRole="button" onPress={() => router.push('/login')} style={styles.account}>
+        {session?.profile.picture ? (
+          <Image source={session.profile.picture} style={styles.accountImage} contentFit="cover" />
+        ) : (
+          <Text style={styles.accountText}>{session ? session.profile.name : 'ログイン'}</Text>
+        )}
+      </Pressable>
+    </View>
+  );
+
+  if (!data) {
+    return (
+      <Page>
+        {header}
+        <LoadState error={error} onRetry={reload} />
+      </Page>
+    );
+  }
+
+  const today = data.today;
+  const readCount = today.filter((a) => read[a.id]).length;
+  const nextId = today.find((a) => !read[a.id])?.id;
+  const remaining = today.length - readCount;
+  const archive = cat === 'all' ? data.archive : [...today, ...data.archive].filter((a) => a.category === cat);
 
   return (
     <Page>
-      <View style={styles.header}>
-        <View style={styles.brand}>
-          <Fukumaru size={36} />
-          <Text style={styles.brandText}>にこにゅー</Text>
-        </View>
-        <Pressable accessibilityRole="button" onPress={() => router.push('/login')} style={styles.account}>
-          {profile?.picture ? (
-            <Image source={profile.picture} style={styles.accountImage} contentFit="cover" />
-          ) : (
-            <Text style={styles.accountText}>{profile ? profile.name : 'ログイン'}</Text>
-          )}
-        </Pressable>
-      </View>
+      {header}
+
+      {data.sample ? (
+        <Text style={styles.sampleNote}>データベースが未設定のため、サンプル記事を表示しています（スタンプとひとことは保存されません）</Text>
+      ) : null}
 
       <View style={styles.greeting}>
         <View style={styles.greetingMascot}>
@@ -51,28 +71,28 @@ export default function TodayScreen() {
         </View>
         <Text style={styles.greetingDate}>{todayLabel()}</Text>
         <Text style={[text.h1, styles.greetingTitle]}>おはようございます</Text>
-        <Text style={styles.greetingSub}>今日のいいニュースは{TODAY.length}本です</Text>
+        <Text style={styles.greetingSub}>今日のいいニュースは{today.length}本です</Text>
         <View style={styles.progressRow}>
           <View style={styles.progressBars}>
-            {TODAY.map((a) => (
+            {today.map((a) => (
               <View key={a.id} style={[styles.progressBar, { backgroundColor: read[a.id] ? C.sunDeep : '#FFFFFF' }]} />
             ))}
           </View>
           <Text style={text.bold}>
-            {readCount} / {TODAY.length} 読んだ
+            {readCount} / {today.length} 読んだ
           </Text>
         </View>
       </View>
 
       <View style={styles.list}>
-        {TODAY.map((a, i) =>
+        {today.map((a, i) =>
           a.id === nextId ? (
             <Pressable key={a.id} accessibilityRole="link" onPress={() => openArticle(a.id)}>
               <Card style={styles.bigCard}>
                 <View>
                   <Scene name={a.scene} width="100%" height={190} />
                   <Text style={styles.nextBadge}>
-                    つぎはこれ　{i + 1} / {TODAY.length}
+                    つぎはこれ　{i + 1} / {today.length}
                   </Text>
                 </View>
                 <View style={styles.bigBody}>
@@ -91,7 +111,7 @@ export default function TodayScreen() {
                     </View>
                     <View style={styles.stat}>
                       <ChatIcon size={16} color="#EFE9DF" />
-                      <Text style={text.small}>ひとこと {commentCount(a)}</Text>
+                      <Text style={text.small}>ひとこと {a.commentCount}</Text>
                     </View>
                   </View>
                 </View>
@@ -161,7 +181,8 @@ export default function TodayScreen() {
             );
           })}
         </View>
-        <Text style={text.small}>{cat === 'all' ? 'きのうのにこにゅー' : `「${CATEGORIES[cat].label}」のにこにゅー`}</Text>
+        <Text style={text.small}>{cat === 'all' ? 'これまでのにこにゅー' : `「${CATEGORIES[cat].label}」のにこにゅー`}</Text>
+        {archive.length === 0 ? <Text style={text.small}>まだ記事がありません</Text> : null}
         {archive.map((a) => (
           <Pressable key={a.id} accessibilityRole="link" onPress={() => openArticle(a.id)} style={styles.archiveRow}>
             <Thumb article={a} size={64} />
@@ -175,7 +196,9 @@ export default function TodayScreen() {
         ))}
       </View>
 
-      <Text style={[text.tiny, styles.note]}>試作版です。記事とひとことは、すべて架空のサンプルです。</Text>
+      <Text style={[text.tiny, styles.note]}>
+        {data.sample ? '試作版です。記事とひとことは、すべて架空のサンプルです。' : '試作版です。記事は海外メディアの内容をAIが要約したものです。'}
+      </Text>
     </Page>
   );
 }
@@ -187,6 +210,7 @@ const styles = StyleSheet.create({
   account: { minHeight: 44, minWidth: 44, alignItems: 'center', justifyContent: 'center' },
   accountImage: { width: 32, height: 32, borderRadius: 16 },
   accountText: { fontFamily: fonts.body, fontSize: 13, fontWeight: '700', color: C.sunInk },
+  sampleNote: { marginHorizontal: 16, marginTop: 4, padding: 10, borderRadius: 12, backgroundColor: C.soft, fontFamily: fonts.body, fontSize: 11, lineHeight: 17, color: C.sub },
   greeting: { marginHorizontal: 16, marginTop: 6, padding: 20, borderRadius: 28, backgroundColor: C.sunTint, overflow: 'hidden' },
   greetingMascot: { position: 'absolute', right: 6, top: 4 },
   greetingDate: { fontFamily: fonts.body, fontSize: 12, fontWeight: '500', color: C.sunInk },
@@ -237,5 +261,5 @@ const styles = StyleSheet.create({
   filterText: { fontFamily: fonts.body, fontSize: 13, fontWeight: '700' },
   archiveRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   archiveMeta: { fontFamily: fonts.body, fontSize: 11, fontWeight: '700' },
-  note: { textAlign: 'center', marginTop: 28 },
+  note: { textAlign: 'center', marginTop: 28, paddingHorizontal: 16 },
 });
