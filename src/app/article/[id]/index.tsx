@@ -16,6 +16,7 @@ export default function ArticleScreen() {
   const list = useApi<ArticleListResponse>('/api/articles');
   const read = useRead();
   const [notice, setNotice] = useState<string | null>(null);
+  const [summaryOpen, setSummaryOpen] = useState(false);
 
   useEffect(() => {
     if (detail.data) markRead(detail.data.article.id);
@@ -64,6 +65,14 @@ export default function ArticleScreen() {
       </View>
       {article.photo?.ai ? (
         <Text style={[text.tiny, styles.caption]}>画像はAIで作ったイメージです。実際の出来事の写真ではありません。</Text>
+      ) : article.photo?.source ? (
+        // 元記事の写真は、媒体名と元記事へのリンクを表記する
+        <Text style={[text.tiny, styles.caption]}>
+          写真：
+          <Text style={styles.creditLink} onPress={() => Linking.openURL(article.photo!.pageUrl)}>
+            {article.photo.creator}（元記事より）
+          </Text>
+        </Text>
       ) : article.photo ? (
         // ライセンスに沿って、写真のタイトル・撮影者・掲載元・ライセンスを表記する
         <Text style={[text.tiny, styles.caption]}>
@@ -93,14 +102,26 @@ export default function ArticleScreen() {
         </View>
         <Text style={styles.title}>{article.title}</Text>
 
-        <View style={styles.summary}>
-          <Text style={styles.summaryTitle}>3行でいうと</Text>
-          {article.summary.map((s, i) => (
-            <View key={s} style={styles.summaryRow}>
-              <Text style={styles.summaryNum}>{i + 1}.</Text>
-              <Text style={styles.summaryText}>{s}</Text>
+        {/* 3行要約は、読みたい人だけが開く（最初は閉じておく） */}
+        <View style={[styles.summary, summaryOpen && styles.summaryOpen]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: summaryOpen }}
+            onPress={() => setSummaryOpen((open) => !open)}
+            style={styles.summaryHead}>
+            <Text style={styles.summaryTitle}>3行でいうと</Text>
+            <View style={{ transform: [{ rotate: summaryOpen ? '-90deg' : '90deg' }] }}>
+              <ChevronIcon size={16} color={C.sunInk} />
             </View>
-          ))}
+          </Pressable>
+          {summaryOpen
+            ? article.summary.map((s, i) => (
+                <View key={s} style={styles.summaryRow}>
+                  <Text style={styles.summaryNum}>{i + 1}.</Text>
+                  <Text style={styles.summaryText}>{s}</Text>
+                </View>
+              ))
+            : null}
         </View>
 
         {article.body.map((p) => (
@@ -199,11 +220,13 @@ const styles = StyleSheet.create({
   article: { paddingHorizontal: 20, paddingTop: 16, gap: 16 },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   title: { fontFamily: fonts.rounded, fontWeight: '800', fontSize: 23, lineHeight: 34, color: C.ink },
-  summary: { backgroundColor: C.sunTint, borderRadius: 22, padding: 16, paddingHorizontal: 18, gap: 8 },
-  summaryTitle: { fontFamily: fonts.rounded, fontWeight: '800', fontSize: 14, color: C.sunInk, marginBottom: 2 },
+  summary: { backgroundColor: C.sunTint, borderRadius: 18, paddingVertical: 4, paddingHorizontal: 18, paddingBottom: 4, gap: 8 },
+  summaryHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 44 },
+  summaryTitle: { fontFamily: fonts.rounded, fontWeight: '800', fontSize: 14, color: C.sunInk },
   summaryRow: { flexDirection: 'row', gap: 6 },
   summaryNum: { fontFamily: fonts.body, fontSize: 14, lineHeight: 23, color: C.ink, width: 16 },
   summaryText: { flex: 1, fontFamily: fonts.body, fontSize: 14, lineHeight: 23, color: C.ink },
+  summaryOpen: { paddingBottom: 14 },
   source: { gap: 4, paddingTop: 14, borderTopWidth: 1, borderTopColor: C.line },
   sourceUrl: { color: C.sub },
   stampBox: { marginHorizontal: 16, marginTop: 28, padding: 14, paddingTop: 20, borderRadius: 28, backgroundColor: C.soft, gap: 14 },

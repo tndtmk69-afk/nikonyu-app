@@ -13,6 +13,7 @@ export type ArticlePhoto = {
   licenseUrl: string | null;
   pageUrl: string; // 写真の説明ページ
   ai?: boolean; // AIで作った画像（src/server/ai-image.ts）。画面で「AI生成イメージ」と表示する
+  source?: boolean; // 元記事の写真（ページの og:image）。画面で媒体名と元記事へのリンクを表記する
 };
 
 // AIに検索語を考えてもらうときのルール（取り込みとまとめての写真付けで共通）
@@ -24,7 +25,7 @@ export const PHOTO_QUERY_RULE = `photo_queries：記事の雰囲気に合う写�
 // タイトルにこれらの言葉がある画像は、人の顔や文字・ロゴが写っているか、写真ではないか、
 // いいニュースに合わない（軍事、事故など）可能性が高いので使わない
 const AVOID =
-  /\b(man|men|woman|women|person|people|boys?|girls?|child|children|kids?|baby|toddler|teens?|teenagers?|youth|faces?|portraits?|selfie|couples?|family|crowd|group|team|players?|party|dance|lady|guy|students?|workers?|owners?|farmers?|visitors?|logos?|brand|signs?|text|posters?|illustrations?|drawings?|paintings?|engravings?|sculptures?|statues?|plates?|maps?|diagrams?|charts?|graphs?|figures?|screenshots?|stamps?|coins?|banknotes?|military|navy|army|war|weapons?|soldiers?|aircraft|fighter|police|protests?|smoking|cigarettes?|fatal|crash(es)?|accidents?|death|dead|injur\w*)\b/i;
+  /\b(man|men|woman|women|person|people|boys?|girls?|child|children|kids?|baby|toddler|teens?|teenagers?|youth|faces?|portraits?|selfie|couples?|family|crowd|group|team|players?|party|dance|lady|guy|students?|workers?|owners?|farmers?|visitors?|logos?|brand|signs?|billboards?|advert\w*|text|posters?|illustrations?|drawings?|paintings?|engravings?|sculptures?|statues?|plates?|maps?|diagrams?|charts?|graphs?|figures?|screenshots?|stamps?|coins?|banknotes?|military|navy|army|war|weapons?|soldiers?|aircraft|fighter|police|protests?|smoking|cigarettes?|fatal|crash(es)?|accidents?|death|dead|injur\w*)\b/i;
 
 // 商用で使えて、改変（縮小・切り抜き）もでき、表記以外の条件がないライセンスだけを使う（CC BY-SA は使わない）
 const ALLOWED_LICENSE = /^(CC0|Public domain|PD|CC BY \d(\.\d)?)$/i;

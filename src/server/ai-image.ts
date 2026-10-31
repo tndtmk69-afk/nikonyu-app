@@ -41,7 +41,9 @@ export async function generateImage(prompt: string): Promise<{ data: Buffer; con
     form.append('height', '576');
     data = await run(IMAGE_MODEL, form);
   } catch (e) {
-    // 使えなかったときは、正方形しか作れないが安定している FLUX.1 で作る（画面では横長に切り抜いて表示する）
+    // 内容の確認で止められたときは作り直さない（FLUX.1 は「文字を入れない」などの指示が効きにくく、崩れた看板などが出やすい）
+    if (/flagged/i.test((e as Error).message)) throw e;
+    // モデルが使えなかったときは、正方形しか作れないが安定している FLUX.1 で作る（画面では横長に切り抜いて表示する）
     console.warn(`   ${(e as Error).message}（${FALLBACK_MODEL} で作り直します）`);
     model = FALLBACK_MODEL;
     data = await run(FALLBACK_MODEL, JSON.stringify({ prompt, steps: 6 }), { 'Content-Type': 'application/json' });
